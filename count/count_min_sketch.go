@@ -3,15 +3,17 @@ package count
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/gob"
 	"errors"
 	"io"
 	"math"
 	"math/rand"
+	"unsafe"
 
 	"github.com/apache/datasketches-go/internal"
 )
 
-type countMinSketch struct {
+type countMinSketch[T any] struct {
 	numBuckets  int32 // counter array size for each of the hashing function
 	numHashes   int8  // number of hashing functions
 	sketchSlice []int64
@@ -20,7 +22,7 @@ type countMinSketch struct {
 	hashSeeds   []int64
 }
 
-func NewCountMinSketch(numHashes int8, numBuckets int32, seed int64) (*countMinSketch, error) {
+func NewCountMinSketch[T any](numHashes int8, numBuckets int32, seed int64) (*countMinSketch[T], error) {
 	if numBuckets < 3 {
 		return nil, errors.New("using fewer than 3 buckets incurs relative error greater than 1.0")
 	}
@@ -38,7 +40,7 @@ func NewCountMinSketch(numHashes int8, numBuckets int32, seed int64) (*countMinS
 	sketchSize := int(numBuckets * int32(numHashes))
 	sketchSlice := make([]int64, sketchSize)
 
-	return &countMinSketch{
+	return &countMinSketch[T]{
 		numBuckets:  numBuckets,
 		numHashes:   numHashes,
 		sketchSlice: sketchSlice,
@@ -47,31 +49,31 @@ func NewCountMinSketch(numHashes int8, numBuckets int32, seed int64) (*countMinS
 	}, nil
 }
 
-func (c *countMinSketch) getNumBuckets() int32 {
+func (c *countMinSketch[T]) getNumBuckets() int32 {
 	return c.numBuckets
 }
 
-func (c *countMinSketch) getNumHashes() int8 {
+func (c *countMinSketch[T]) getNumHashes() int8 {
 	return c.numHashes
 }
 
-func (c *countMinSketch) getTotalWeight() int64 {
+func (c *countMinSketch[T]) getTotalWeight() int64 {
 	return c.totalWeight
 }
 
-func (c *countMinSketch) getSeed() int64 {
+func (c *countMinSketch[T]) getSeed() int64 {
 	return c.seed
 }
 
-func (c *countMinSketch) getRelativeError() float64 {
+func (c *countMinSketch[T]) getRelativeError() float64 {
 	return math.Exp(1.0) / float64(c.numBuckets)
 }
 
-func (c *countMinSketch) isEmpty() bool {
+func (c *countMinSketch[T]) isEmpty() bool {
 	return c.totalWeight == 0
 }
 
-func (c *countMinSketch) getHashes(item []byte) []int64 {
+func (c *countMinSketch[T]) getHashes(item []byte) []int64 {
 	var bucketIndex, hashSeedIndex uint64
 	sketchUpdateLocations := make([]int64, c.numHashes)
 
@@ -85,7 +87,7 @@ func (c *countMinSketch) getHashes(item []byte) []int64 {
 	return sketchUpdateLocations
 }
 
-func (c *countMinSketch) Update(item []byte, weight int64) error {
+func (c *countMinSketch[T]) update(item []byte, weight int64) error {
 	if len(item) == 0 {
 		return nil
 	}
@@ -103,21 +105,23 @@ func (c *countMinSketch) Update(item []byte, weight int64) error {
 	return nil
 }
 
-func (c *countMinSketch) UpdateUint64(item uint64, weight int64) error {
-	b := make([]byte, 8)
-	binary.LittleEndian.PutUint64(b, item)
-	return c.Update(b, weight)
-}
-
-func (c *countMinSketch) UpdateString(item string, weight int64) error {
-	if len(item) == 0 {
+func (c *countMinSketch[T]) Update(item T, weight int64) error {
+	if unsafe.Sizeof(item) == 0 {
 		return nil
 	}
 
-	return c.Update([]byte(item), weight)
+	var b []byte
+	buf := bytes.NewBuffer(b)
+	encoder := gob.NewEncoder(buf)
+	err := encoder.Encode(item)
+	if err != nil {
+		return err
+	}
+
+	return c.update(buf.Bytes(), weight)
 }
 
-func (c *countMinSketch) GetEstimate(item []byte) int64 {
+func (c *countMinSketch[T]) getEstimate(item []byte) int64 {
 	if len(item) == 0 {
 		return 0
 	}
@@ -130,40 +134,30 @@ func (c *countMinSketch) GetEstimate(item []byte) int64 {
 	return estimate
 }
 
-func (c *countMinSketch) GetEstimateUint64(item uint64) int64 {
-	b := make([]byte, 8)
-	binary.LittleEndian.PutUint64(b, item)
-	return c.GetEstimate(b)
-}
-
-func (c *countMinSketch) GetEstimateString(item string) int64 {
-	if len(item) == 0 {
+func (c *countMinSketch[T]) GetEstimate(item T) int64 {
+	if unsafe.Sizeof(item) == 0 {
 		return 0
 	}
-	return c.GetEstimate([]byte(item))
+
+	var b []byte
+	buf := bytes.NewBuffer(b)
+	encoder := gob.NewEncoder(buf)
+	err := encoder.Encode(item)
+	if err != nil {
+		return -1
+	}
+	return c.getEstimate(buf.Bytes())
 }
 
-func (c *countMinSketch) GetUpperBound(item []byte) int64 {
+func (c *countMinSketch[T]) GetUpperBound(item T) int64 {
 	return c.GetEstimate(item) + int64(c.getRelativeError()*float64(c.getTotalWeight()))
 }
 
-func (c *countMinSketch) GetUpperBoundUint64(item uint64) int64 {
-	b := make([]byte, 8)
-	binary.LittleEndian.PutUint64(b, item)
-	return c.GetUpperBound(b)
-}
-
-func (c *countMinSketch) GetLowerBound(item []byte) int64 {
+func (c *countMinSketch[T]) GetLowerBound(item T) int64 {
 	return c.GetEstimate(item)
 }
 
-func (c *countMinSketch) GetLowerBoundUint64(item uint64) int64 {
-	b := make([]byte, 8)
-	binary.LittleEndian.PutUint64(b, item)
-	return c.GetLowerBound(b)
-}
-
-func (c *countMinSketch) Merge(otherSketch *countMinSketch) error {
+func (c *countMinSketch[T]) Merge(otherSketch *countMinSketch[T]) error {
 	if c == otherSketch {
 		return errors.New("cannot merge sketch with itself")
 	}
@@ -184,7 +178,7 @@ func (c *countMinSketch) Merge(otherSketch *countMinSketch) error {
 	return nil
 }
 
-func (c *countMinSketch) Serialize(w io.Writer) error {
+func (c *countMinSketch[T]) Serialize(w io.Writer) error {
 	preambleLongs := byte(PREAMBLE_LONGS_SHORT)
 	serVer := byte(SERIAL_VERSION_1)
 	familyID := byte(FAMILY_ID)
@@ -249,7 +243,7 @@ func (c *countMinSketch) Serialize(w io.Writer) error {
 	return nil
 }
 
-func (c *countMinSketch) deserialize(b []byte, seed int64) (*countMinSketch, error) {
+func (c *countMinSketch[T]) deserialize(b []byte, seed int64) (*countMinSketch[T], error) {
 	r := bytes.NewReader(b)
 	preamble, err := r.ReadByte()
 	if err != nil {

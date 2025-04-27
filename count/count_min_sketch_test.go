@@ -10,12 +10,12 @@ import (
 func Test_CountMinSketch(t *testing.T) {
 	seed := int64(1234567)
 	t.Run("CM init - throws", func(t *testing.T) {
-		cms, err := NewCountMinSketch(5, 1, seed)
+		cms, err := NewCountMinSketch[uint64](5, 1, seed)
 		assert.Error(t, err)
 		assert.ErrorContains(t, err, "using fewer than 3 buckets incurs relative error greater than 1.0")
 		assert.Nil(t, cms)
 
-		cms, err = NewCountMinSketch(4, 268435456, seed)
+		cms, err = NewCountMinSketch[uint64](4, 268435456, seed)
 		assert.Error(t, err)
 		assert.ErrorContains(t, err, "these parameters generate a sketch that exceeds 2^30 elements")
 		assert.Nil(t, cms)
@@ -24,7 +24,7 @@ func Test_CountMinSketch(t *testing.T) {
 	t.Run("CM Init", func(t *testing.T) {
 		numHashes := int8(3)
 		numBuckets := int32(5)
-		cms, err := NewCountMinSketch(int8(numHashes), int32(numBuckets), seed)
+		cms, err := NewCountMinSketch[uint64](int8(numHashes), int32(numBuckets), seed)
 		assert.NoError(t, err)
 
 		assert.Equal(t, numHashes, cms.getNumHashes())
@@ -64,19 +64,19 @@ func Test_CountMinSketch(t *testing.T) {
 
 		// Check that the sketch get_epsilon acts inversely to suggest_num_buckets
 		numHashes = int8(3)
-		cms, err := NewCountMinSketch(numHashes, int32(14), seed)
+		cms, err := NewCountMinSketch[uint64](numHashes, int32(14), seed)
 		assert.NoError(t, err)
 		assert.Less(t, cms.getRelativeError(), 0.2)
 
-		cms, err = NewCountMinSketch(numHashes, int32(28), seed)
+		cms, err = NewCountMinSketch[uint64](numHashes, int32(28), seed)
 		assert.NoError(t, err)
 		assert.Less(t, cms.getRelativeError(), 0.1)
 
-		cms, err = NewCountMinSketch(numHashes, int32(55), seed)
+		cms, err = NewCountMinSketch[uint64](numHashes, int32(55), seed)
 		assert.NoError(t, err)
 		assert.Less(t, cms.getRelativeError(), 0.05)
 
-		cms, err = NewCountMinSketch(numHashes, int32(272), seed)
+		cms, err = NewCountMinSketch[uint64](numHashes, int32(272), seed)
 		assert.NoError(t, err)
 		assert.Less(t, cms.getRelativeError(), 0.01)
 
@@ -108,38 +108,40 @@ func Test_CountMinSketch(t *testing.T) {
 		numHashes := int8(3)
 		numBuckets := int32(5)
 		insertedWeights := int64(0)
-		cms, err := NewCountMinSketch(numHashes, numBuckets, seed)
+		cms, err := NewCountMinSketch[string](numHashes, numBuckets, seed)
 		assert.NoError(t, err)
 		x := "x"
 
 		assert.True(t, cms.isEmpty())
-		estimate := cms.GetEstimateString(x)
+		estimate := cms.GetEstimate(x)
 		assert.Equal(t, int64(0), estimate) // no items in sketch so estimate should be zero
 
-		err = cms.UpdateString(x, int64(1))
+		err = cms.Update(x, int64(1))
 		assert.NoError(t, err)
 		assert.False(t, cms.isEmpty())
 		insertedWeights += 1
-		estimate = cms.GetEstimateString(x)
+		estimate = cms.GetEstimate(x)
 		assert.Equal(t, insertedWeights, estimate)
 
 		weight := int64(9)
 		insertedWeights += 9
-		err = cms.UpdateString(x, weight)
+		err = cms.Update(x, weight)
 		assert.NoError(t, err)
 
-		estimate = cms.GetEstimateString(x)
+		estimate = cms.GetEstimate(x)
 		assert.Equal(t, insertedWeights, estimate)
 	})
 
 	t.Run("CM frequency cancellation", func(t *testing.T) {
-		cms, err := NewCountMinSketch(int8(1), int32(5), seed)
+		cms, err := NewCountMinSketch[string](int8(1), int32(5), seed)
 		assert.NoError(t, err)
-		cms.UpdateString("x", 1)
-		cms.UpdateString("y", -1)
+		err = cms.Update("x", 1)
+		assert.NoError(t, err)
+		err = cms.Update("y", -1)
+		assert.NoError(t, err)
 		assert.Equal(t, int64(2), cms.getTotalWeight())
-		assert.Equal(t, int64(1), cms.GetEstimateString("x"))
-		assert.Equal(t, int64(-1), cms.GetEstimateString("y"))
+		assert.Equal(t, int64(1), cms.GetEstimate("x"))
+		assert.Equal(t, int64(-1), cms.GetEstimate("y"))
 	})
 
 	t.Run("CM frequency estimates", func(t *testing.T) {
@@ -160,18 +162,19 @@ func Test_CountMinSketch(t *testing.T) {
 		numHashes, err := SuggestNumHashes(confidence)
 		assert.NoError(t, err)
 
-		cms, err := NewCountMinSketch(numHashes, numBuckets, seed)
+		cms, err := NewCountMinSketch[uint64](numHashes, numBuckets, seed)
 		assert.NoError(t, err)
 		for i := range numItems {
 			value := data[i]
 			freq := frequencies[i]
-			cms.UpdateUint64(value, freq)
+			err = cms.Update(value, freq)
+			assert.NoError(t, err)
 		}
 
 		for _, d := range data {
-			est := cms.GetEstimateUint64(d)
-			upp := cms.GetUpperBoundUint64(d)
-			low := cms.GetLowerBoundUint64(d)
+			est := cms.GetEstimate(d)
+			upp := cms.GetUpperBound(d)
+			low := cms.GetLowerBound(d)
 			assert.LessOrEqual(t, est, upp)
 			assert.GreaterOrEqual(t, est, low)
 		}
@@ -185,25 +188,25 @@ func Test_CountMinSketch(t *testing.T) {
 		numHashes, err := SuggestNumHashes(confidence)
 		assert.NoError(t, err)
 
-		cms, err := NewCountMinSketch(numHashes, numBuckets, seed)
+		cms, err := NewCountMinSketch[uint64](numHashes, numBuckets, seed)
 		assert.NoError(t, err)
 		err = cms.Merge(cms)
 		assert.Error(t, err)
 		assert.ErrorContains(t, err, "cannot merge sketch with itself")
 
-		s1, err := NewCountMinSketch(numHashes+1, numBuckets, seed)
+		s1, err := NewCountMinSketch[uint64](numHashes+1, numBuckets, seed)
 		assert.NoError(t, err)
 		err = cms.Merge(s1)
 		assert.Error(t, err)
 		assert.ErrorContains(t, err, "sketches are incompatible")
 
-		s2, err := NewCountMinSketch(numHashes, numBuckets+1, seed)
+		s2, err := NewCountMinSketch[uint64](numHashes, numBuckets+1, seed)
 		assert.NoError(t, err)
 		err = cms.Merge(s2)
 		assert.Error(t, err)
 		assert.ErrorContains(t, err, "sketches are incompatible")
 
-		s3, err := NewCountMinSketch(numHashes, numBuckets, 1)
+		s3, err := NewCountMinSketch[uint64](numHashes, numBuckets, 1)
 		assert.NoError(t, err)
 		err = cms.Merge(s3)
 		assert.Error(t, err)
@@ -218,10 +221,10 @@ func Test_CountMinSketch(t *testing.T) {
 		numHashes, err := SuggestNumHashes(confidence)
 		assert.NoError(t, err)
 
-		cms, err := NewCountMinSketch(numHashes, numBuckets, seed)
+		cms, err := NewCountMinSketch[uint64](numHashes, numBuckets, seed)
 		assert.NoError(t, err)
 
-		otherCms, err := NewCountMinSketch(cms.getNumHashes(), cms.getNumBuckets(), seed)
+		otherCms, err := NewCountMinSketch[uint64](cms.getNumHashes(), cms.getNumBuckets(), seed)
 		assert.NoError(t, err)
 
 		err = cms.Merge(otherCms)
@@ -230,9 +233,9 @@ func Test_CountMinSketch(t *testing.T) {
 
 		data := []uint64{2, 3, 5, 7}
 		for _, d := range data {
-			err = cms.UpdateUint64(d, int64(1))
+			err = cms.Update(d, int64(1))
 			assert.NoError(t, err)
-			err = otherCms.UpdateUint64(d, int64(1))
+			err = otherCms.Update(d, int64(1))
 			assert.NoError(t, err)
 		}
 		err = cms.Merge(otherCms)
@@ -240,15 +243,15 @@ func Test_CountMinSketch(t *testing.T) {
 		assert.Equal(t, cms.getTotalWeight(), 2*otherCms.getTotalWeight())
 
 		for _, d := range data {
-			assert.LessOrEqual(t, cms.GetEstimateUint64(d), cms.GetUpperBoundUint64(d))
-			assert.LessOrEqual(t, cms.GetEstimateUint64(d), int64(2))
+			assert.LessOrEqual(t, cms.GetEstimate(d), cms.GetUpperBound(d))
+			assert.LessOrEqual(t, cms.GetEstimate(d), int64(2))
 		}
 	})
 
 	t.Run("CM serialize-deserialize", func(t *testing.T) {
 		numHashes := int8(3)
 		numBuckets := int32(5)
-		c, err := NewCountMinSketch(numHashes, numBuckets, seed)
+		c, err := NewCountMinSketch[uint64](numHashes, numBuckets, seed)
 		assert.NoError(t, err)
 		var buf []byte
 		b := bytes.NewBuffer(buf)
@@ -256,13 +259,14 @@ func Test_CountMinSketch(t *testing.T) {
 		assert.NoError(t, err)
 
 		d, err := c.deserialize(b.Bytes(), seed)
+
 		assert.NoError(t, err)
 		assert.Equal(t, c, d)
 		assert.NotEqual(t, &c, d)
 
 		data := []uint64{2, 3, 5, 7}
 		for _, d := range data {
-			err = c.UpdateUint64(d, int64(1))
+			err = c.Update(d, int64(1))
 			assert.NoError(t, err)
 		}
 
